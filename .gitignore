@@ -1,0 +1,9 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.here
+*.Rproj
+*.xlsx
+data/fundings.csv
+data/organizations.csv
