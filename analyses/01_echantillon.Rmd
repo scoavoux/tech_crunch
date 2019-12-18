@@ -1,0 +1,313 @@
+---
+title: "Échantillonnage des données Crunchbase"
+author: "Samuel Coavoux"
+date: "28 décembre 2018"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+opts_chunk$set(echo = FALSE, warning = FALSE, error = FALSE, message = FALSE)
+options(digits = 4)
+```
+
+```{r packages}
+library(tidyverse)
+library(lubridate) # charger avant here pour éviter conflit
+library(stringr)
+library(here)
+```
+
+```{r data}
+# Il faut spécifier les types de colonnes parce que sinon, funding_total_usd
+# est parsé comme integer => les grands nombres sont manquants
+org <- read_csv(here("crunchbase", "crunchbase_data", "organizations.csv"),
+                col_types = cols_only( # on essaye de limiter l'import en supprimant les colonnes inutiles
+                  company_name = col_character(),
+                  roles = col_character(),
+                  # permalink = col_character(),
+                  # domain = col_character(),
+                  # homepage_url = col_character(),
+                  country_code = col_character(),
+                  state_code = col_character(),
+                  region = col_character(),
+                  city = col_character(),
+                  address = col_character(),
+                  status = col_character(),
+                  short_description = col_character(),
+                  category_list = col_character(),
+                  category_group_list = col_character(),
+                  funding_rounds = col_integer(),
+                  funding_total_usd = col_double(),  # important
+                  founded_on = col_date(format = ""),
+                  last_funding_on = col_date(format = ""),
+                  closed_on = col_date(format = ""),
+                  employee_count = col_character(),
+                  # email = col_character(),
+                  # phone = col_character(),
+                  # facebook_url = col_character(),
+                  # linkedin_url = col_character(),
+                  # cb_url = col_character(),
+                  # logo_url = col_character(),
+                  # twitter_url = col_character(),
+                  aliases = col_character(),
+                  uuid = col_character(),
+                  created_at = col_datetime(format = ""),
+                  updated_at = col_datetime(format = ""),
+                  primary_role = col_character(),
+                  type = col_character()
+                ))
+
+fnd <- read_csv(here("crunchbase", "crunchbase_data", "funding_rounds.csv"),
+                col_types = cols(
+                  company_name = col_character(),
+                  country_code = col_character(),
+                  state_code = col_character(),
+                  region = col_character(),
+                  city = col_character(),
+                  investment_type = col_character(),
+                  announced_on = col_date(format = ""),
+                  raised_amount_usd = col_double(),
+                  raised_amount = col_double(),
+                  raised_amount_currency_code = col_character(),
+                  post_money_valuation_usd = col_double(),
+                  post_money_valuation = col_double(),
+                  post_money_currency_code = col_character(),
+                  investor_count = col_integer(),
+                  cb_url = col_character(),
+                  company_uuid = col_character(),
+                  funding_round_uuid = col_character(),
+                  created_at = col_datetime(format = ""),
+                  updated_at = col_datetime(format = ""),
+                  investor_names = col_character(),
+                  investor_uuids = col_character()
+                ))
+
+```
+
+
+```{r recodage}
+org <- mutate(org, 
+              employee_count = factor(employee_count, 
+                                      levels = c("1-10", "11-50", "51-100", "101-250", "251-500", "501-1000",
+                                                 "1001-5000", "5001-10000", "10000+", "unknown")))
+
+fnd <- mutate(fnd,
+              investor_uuids = gsub("[\\{\\}]", "", investor_uuids),
+              investor_uuids = ifelse(investor_uuids == "", NA, investor_uuids))
+```
+
+L'objectif de ce document est de diagnostiquer l'état de la base organizations.csv afin de la restreindre pour les prochaines analyses. On s'intéresse en particulier à l'état des valeurs manquantes.
+
+On commence par la base organizations.csv, la base des entreprises.
+
+```{r NA_distrib}
+summarize_all(org, funs(sum(is.na(.)))) %>% 
+  gather(variable, nb_valeurs_manquantes) %>%
+  mutate(prop_val_manquantes = nb_valeurs_manquantes / nrow(org)) %>% 
+  kable(caption = "Nombre et proportion de valeurs manquantes par variable (base organization.csv, N = 702 639)", digits = 4)
+
+```
+
+# Distribution des valeurs manquantes pour les variables géographiques
+
+Quelques tris à plat des variables géographiques. Il apparaît que:
+
++ il y a beaucoup de valeurs manquantes (30% pour les villes, 45% pour les régions). Il n'est pas clair comment le codage de région est fait: dans les villes manquantes, certaines devraient se voir attribuer une region. 
++ le codage est propre: il ne semble pas y avoir de doublon.
+
+```{r geoNA_init}
+org <- mutate(org, 
+              city_missing = paste0("city_missing_", is.na(city)), 
+              region_missing = paste0("region_missing_", is.na(region)))
+
+```
+
+```{r city_distrib}
+count(org, city) %>% 
+  arrange(desc(n)) %>% 
+  mutate(freq = n/sum(n)) %>% 
+  slice(1:50) %>% 
+  kable(caption = "50 premières villes")
+```
+
+```{r region_distrib}
+count(org, region) %>% 
+  arrange(desc(n)) %>% 
+  mutate(freq = n/sum(n)) %>% 
+  slice(1:50) %>% 
+  kable(caption = "50 premières régions")
+```
+
+```{r region_NA_city_distrib}
+filter(org, region_missing == "region_missing_TRUE" & city_missing == "city_missing_FALSE") %>% 
+  count(city) %>% 
+  arrange(desc(n)) %>% 
+  slice(1:50) %>% 
+  kable(caption = "Premières villes dont la région est manquante")
+```
+
+## Par status d'entreprise
+
+On dispose du statut des entreprises de la base. 4,5% seulement d'entreprises fermées, 2% d'IPO, 11% d'acquired, le reste des boites travaillent encore.
+
+```{r status_distrib}
+count(org, status) %>% 
+  mutate(freq = n/sum(n)) %>% 
+  kable(caption = "Distibution des status")
+```
+
+Les variables géo manquent plus souvent pour les boites fermées ou operating que pour les boites acquises ou IPOed. Les boites fermées sont toujours les moins bien renseignées => biais de survie ?
+
+```{r cityNA_status_table}
+table(org$status, org$city_missing) %>% 
+  prop.table(margin = 1) %>% 
+  kable(caption = "Distribution des valeurs manquantes de la variable ville par status")
+```
+
+```{r regionNA_status_table}
+table(org$status, org$region_missing) %>% 
+  prop.table(margin = 1) %>% 
+  kable(caption = "Distribution des valeurs manquantes de la variable région par status")
+```
+
+## Par taille d'entreprise
+
+NB: on ne sait pas à quelle période est mesurée la taille => mesure survie et croissance plutôt qu'importance dans l'histoire (on peut penser que les boites 10000+ ont commencés avec moins)
+
+La distribution des tailles d'entreprises est assez concentré, mais on trouve un grosse minorité de très grosses boites.
+
+```{r taille_entreprise_distrib}
+count(org, employee_count) %>% 
+  mutate(freq = n/sum(n)) %>% 
+  kable(caption = "Distibution de la variable nombre d'employés")
+```
+
+```{r taille_entreprise_distrib_plot}
+ggplot(filter(org, employee_count != "unknown"), aes(employee_count)) +
+  geom_bar(stat = "count")
+```
+
+Les très grandes entreprises sont celles où la ville est le mieux renseignés, mais le pattern n'est pas clair. Paradoxalement, ce sont les enterprises moyennes (100-250 employés) qui sont les moins bien renseignées (près de 50% de valeurs manquantes pour la ville, contre 38 en moyenne), alors que les entreprises plus petites, notamment 51-100, sont plutôt bien renseignés (et aussi les 11-50).
+
+```{r taille_enterp_X_city_missing}
+table(org$employee_count, org$city_missing) %>% 
+  prop.table(margin = 1) %>% 
+  kable(caption = "Proportion de villes manquantes par nb d'employés")
+```
+
+```{r taille_enterp_X_region_missing}
+table(org$employee_count, org$region_missing) %>% 
+  prop.table(margin = 1) %>% 
+  kable(caption = "Proportion de régions manquantes par nb d'employés")
+```
+
+## Par secteur d'activité
+
+Une entreprise peut avoir plusieurs secteurs. Dans cette sous-section, on raisonne sur les secteurs à plat => chaque entreprise compte pour un individu statistique pour chacun de ses secteurs d'appartenance.
+
+```{r category_group_distrib}
+select(org, category_group_list) %>% 
+  separate_rows(category_group_list, sep = ",") %>% 
+  filter(!is.na(category_group_list)) %>% 
+  count(category_group_list) %>% 
+  mutate(freq = n / sum(n)) %>% 
+  arrange(desc(n)) %>% 
+  #ggplot(aes(log(n))) + geom_density()
+  kable(caption = "Distribution des catégories (par ordre d'importance)")
+```
+
+
+```{r category_group_X_city_missing}
+select(org, category_group_list, city_missing) %>% 
+  separate_rows(category_group_list, sep = ",") %>% 
+  count(category_group_list, city_missing) %>% 
+  group_by(category_group_list) %>% 
+  mutate(n = n / sum(n)) %>% 
+  spread(city_missing, n) %>% 
+  arrange(city_missing_FALSE) %>% 
+  kable(caption = "Proportion de villes manquantes par catégories")
+```
+
+# Par renseignement des investissements
+
+
+On base à la base funding_rounds qui décrit les levées de fonds. Les villes y sont bien mieux renseignées.
+
+```{r geoNA_init_fnd}
+fnd <- mutate(fnd, 
+              city_missing = paste0("city_missing_", is.na(city)), 
+              region_missing = paste0("region_missing_", is.na(region)),
+              investor_uuids_count = ifelse(is.na(investor_uuids) & !is.na( investor_count), 0, str_count(investor_uuids, ",") + 1),
+              investor_rens =  investor_count == investor_uuids_count)
+```
+
+```{r city_missing_fnd_distrib}
+count(fnd, city_missing) %>% 
+  mutate(freq = n /sum(n)) %>% 
+  kable(caption = "Distribution des villes manquantes (base funds)")
+```
+
+On commence par le nombre d'investisseurs recensés. La première variable est le nombre d'investisseurs proposés renseignés par CB. 
+
+```{r investor_count_distrib}
+ggplot(fnd, aes(investor_count)) +
+  geom_histogram()
+```
+
+Il y a environ 30% de valeurs manquantes sur le nombre d'investisseurs.
+
+```{r investor_count_distrib_NA}
+count(fnd, is.na(investor_count)) %>% 
+  mutate(freq = n/sum(n)) %>% 
+  kable(caption = "Nombre de valeurs manquantes du nombre d'investisseurs affirmés")
+```
+
+On pourra comparer les investisseurs affirmés dans la base de ceux qui sont renseignés (on dispose de l'uuid). investor_rens vaut TRUE si les deux chiffres coïncident.
+
+Les valeurs manquantes sont dues à ce que investor_count n'est pas renseigné. La coïncidence entre les deux mesures et l'exception (confirme ce que disait Fabien par mail): 17% du total des rounds seulement.
+
+```{r investor_rens_distrib}
+count(fnd, investor_rens) %>% 
+  mutate(freq = n/sum(n)) %>% 
+  kable(caption = "Distribution de la variable coïncidence entre les deux mesures de nb d'investisseurs")
+```
+
+Le renseignement de la ville n'est pas lié au renseignement des rounds de financement.
+
+```{r investor_rens_X_city_missing}
+table(fnd$investor_rens, fnd$city_missing, useNA="always") %>% 
+  prop.table(1) %>% 
+  kable(caption = "Distribution des investisseurs manquantes pas renseignement de la ville")
+```
+
+# Comparaison entre les deux bases
+
+Quels liens entre les deux bases? En fait, peu d'entreprises renseignées dans funding_rounds, seulement 18% de celles sur lesquelles on dispose d'informations dans organizations.
+
+```{r link_}
+
+data_frame(var = c("Nombre d'uuids uniques dans founding_rounds",
+                   "Nombre d'uuids uniques dans organizations",
+                   "Nombre d'uuids communs"),
+           val = c(length(unique(fnd$company_uuid)),
+                   length(unique(org$uuid)),
+                   sum(unique(org$uuid) %in% unique(fnd$company_uuid))),
+           proportion_commune = sum(unique(org$uuid) %in% unique(fnd$company_uuid)) / val) %>% 
+  kable(caption = "")
+```
+
+À la jonction des deux bases (réduire organizations à celles qui sont présentes dans funding rounds). Combien de valeurs géographiques manquantes?
+
+```{r}
+filter(org, uuid %in% unique(fnd$company_uuid)) %>% 
+  summarize(n = n(),
+            n_city_missing = sum(city_missing == "city_missing_TRUE"),
+            n_region_missing = sum(region_missing == "region_missing_TRUE")
+            ) %>% 
+  gather(variable, value) %>% 
+  kable()
+```
+

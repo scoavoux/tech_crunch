@@ -1,0 +1,502 @@
+---
+title: "Analyses exploratoires de la base crunchbase"
+author: "Samuel Coavoux"
+date: "02/12/2019"
+output: 
+  html_document: 
+    toc: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+opts_chunk$set(echo = TRUE,
+               message = FALSE,
+               error = FALSE,
+               warning = FALSE)
+```
+
+```{r packages}
+library(tidyverse)
+library(lubridate)
+library(here)
+library(janitor)
+library(FactoMineR)
+library(factoextra)
+library(formattable)
+theme_set(theme_bw())
+for(file in list.files(here("functions"))){
+  source(here("functions", file))
+}
+rm(file)
+```
+
+
+```{r data}
+load(here("data_sampled", "sampled_data.RData"))
+source(here("import", "recodage.R"))
+```
+
+# Qu'est-ce que cette industrie ?
+
+<!-- Catégories, action: que fait l'industrie de la tech? -->
+
+<!-- => graph bipartite entreprise category : faire des cluster FT -->
+<!-- => entreprise/category: cluster par AGD SC -->
+<!-- => croiser cluster issues des deux par variables temporelle: date de création, dates de funding (mais quel round conserver) ? FT/SC -->
+<!-- => graph tripartie: investisseur / entreprise / category. Mesurer à quel point les investisseurs sont diversifiés dans les secteurs/catégories. Clusteriser? FT -->
+
+<!-- Hypothèses OA: La tech se structure en strates, en vagues historiques qui restent, en pyramides ; les investisseurs se structurent de façon verticales. -->
+
+
+## Distribution des groupes de catégories
+
+On étudie désormais la variable category_group_list.
+
+TODO: ajouter une mesure des entreprises qui n'ont pas de catégories renseignées.
+
+```{r category_group_n_boxplot, fig.cap = "Distribution du nombre de catégories par entreprises"}
+separate_rows(org, category_group_list, sep = ",") %>% 
+  count(uuid) %>% 
+  ggplot(aes(0, n)) +
+    geom_boxplot(width = 0.5) +
+    scale_x_continuous(limits = c(-1, 1), labels = NULL) +
+    scale_y_continuous(breaks = 1L:14L) +
+    labs(x = "", y = "Number of different categories")
+```
+
+La distribution des catégories des entreprises de la base.
+
+TODO: ajouter pondération: nombre d'entreprise dans cette catégorie / nombre total d'entreprises.
+
+```{r category_group_distrib}
+tb <- separate_rows(org, category_group_list, sep = ",") %>% 
+  select(uuid, category_group_list) %>% 
+  group_by(uuid) %>% 
+  mutate(n = n()) %>% 
+  group_by(category_group_list) %>% 
+  summarise(eff = n(),
+            eff_pond = sum(1/n)) %>% 
+  mutate(prop = eff / sum(eff) * 100,
+         prop_pond = eff_pond / sum(eff_pond) * 100) %>% 
+  arrange(desc(eff)) %>% 
+  select(category_group_list, eff, prop, eff_pond, prop_pond)
+
+kable(tb, caption = "Distribution des groupes de catégories", digits = 1)
+```
+
+Quelle est la répartition des catégories par date de création de l'entreprise ; on ne considère que les entreprises créées depuis 1995 (car trop peu de point de données pour les plus anciennes).
+
+```{r categories_group_per_year, fig.height=24}
+separate_rows(org, category_group_list, sep = ",") %>% 
+  mutate(year = year(founded_on)) %>% 
+  filter(!is.na(category_group_list),
+         year > 1995) %>% 
+  count(category_group_list, year) %>% 
+  group_by(year) %>% 
+  mutate(n = n / sum(n)) %>% 
+  group_by(category_group_list) %>% 
+  arrange(desc(n)) %>% 
+  ggplot(aes(year, n)) +
+    geom_point() + 
+    geom_line() +
+    facet_wrap(~category_group_list, scales = "free", ncol = 3)
+```
+
+## Distribution des catégories
+
+On étudie la variable category_list qui rassemble les catégories auxquelles l'entreprise est associée.
+
+```{r category_n_boxplot, fig.cap = "Distribution du nombre de catégories par entreprises"}
+separate_rows(org, category_list, sep = ",") %>% 
+  count(uuid) %>% 
+  ggplot(aes(0, n)) +
+    geom_boxplot(width = 0.5) +
+    scale_x_continuous(limits = c(-1, 1), labels = NULL) +
+    scale_y_continuous(breaks = 1L:25L) +
+    labs(x = "", y = "Number of different categories")
+```
+
+La distribution des catégories des entreprises de la base. Effectif brute compte chaque couple entreprise-catégorie pour 1 ; l'effectif pondéré pondère chaque couple par le nombre total de catégorie de l'entreprise. (une entreprise Software + Mobile donne 0.5 Software et 0.5 Mobile).
+
+```{r category_distrib}
+tb <- separate_rows(org, category_list, sep = ",") %>% 
+  select(uuid, category_list) %>% 
+  group_by(uuid) %>% 
+  mutate(n = n()) %>% 
+  group_by(category_list) %>% 
+  summarise(eff = n(),
+            eff_pond = sum(1/n)) %>% 
+  mutate(prop = eff / sum(eff) * 100,
+         prop_pond = eff_pond / sum(eff_pond) * 100) %>% 
+  arrange(desc(eff)) %>% 
+  select(category_list, eff, prop, eff_pond, prop_pond)
+
+tb %>% 
+  slice(1:100) %>% 
+  kable(caption = "Distribution des 100 première catégories", digits = 1)
+```
+
+Pour la suite, on ne considère que les catégories les plus représentées
+
+```{r seuil_categories}
+seuil_pond <- 100
+ent <- tb$category_list[tb$eff_pond > seuil_pond]
+```
+
+Quelle est la répartition des catégories par date de création de l'entreprise ; on ne considère que les entreprises créées depuis 1995 (car trop peu de point de données pour les plus anciennes), et que les catégories dont la représentation pondérée totale dans la base est supérieure à `r seuil_pond`.
+
+```{r categories_per_year, fig.height=16}
+separate_rows(org, category_list, sep = ",") %>% 
+  mutate(year = year(founded_on)) %>% 
+  filter(category_list %in% ent,
+         !is.na(category_list),
+         year > 1995) %>% 
+  count(category_list, year) %>% 
+  group_by(year) %>% 
+  mutate(n = n / sum(n)) %>% 
+  ggplot(aes(year, n)) +
+    geom_point() + 
+    geom_line() +
+    facet_wrap(~category_list, scales = "free", ncol = 3)
+```
+
+<!-- # Géographie -->
+
+<!-- TODO -->
+
+<!-- => carte des organisations dans la SV SC -->
+
+# Dynamique des investissements ?
+
+<!-- Hypothèse OA: ce qui structure l'industrie, c'est le cycle de financement. En effet, tous les 18 mois, il faut une levée de fonds, et pour cela, il faut un livrable. -->
+
+<!-- => IPO au bout de 7-8 ans => distribution de l'intervalle entre la date de création et l'IPO, pour les boites qui ont fait un IPO. -->
+<!-- => étudier la distribution de l'intervalle entre deux fundings. Hypothèse: mode à 18 mois. Mais quelle variance? -->
+<!-- => étudier distribution du nombre de round de fundings. Faire la même par investisseur ? Par autres variables ? -->
+
+## Intervalle entre date de création et IPO
+
+Se restreindre aux boites qui ont fait un ipo.
+
+```{r ipo_filter}
+org_ipo <- filter(org, status == "ipo")
+```
+
+Quand ont-elle été fondées ?
+
+```{r ipo_foundedyear_histogram}
+ggplot(org_ipo, aes(year(founded_on))) +
+  geom_histogram()
+```
+
+Problème: comment repérer la date de l'IPO? Dans les funding rounds, si l'on ne prend que le dernier round renseigné, on a une très grande diversité, dont de nombreux 
+
+```{r distribution_rounds_dernier_round}
+lst <- filter(fnd, company_uuid %in% org_ipo$uuid) %>% 
+  group_by(company_uuid) %>% 
+  arrange(desc(announced_on)) %>% 
+  slice(1) %>% 
+  ungroup() %>% 
+  count(investment_type, name = "n_last")
+filter(fnd, company_uuid %in% org_ipo$uuid) %>% 
+  group_by(investment_type) %>% 
+  summarise(n_distinct_company = n_distinct(company_uuid),
+            n_all = n()) %>% 
+  full_join(lst) %>% 
+  kable(capion = "Nombre de funding round par type d'investissement : nombre de compangies différentes ayant ce round, nombre total renseigné, type du dernier round renseigné par compagnie")
+```
+
+**Je ne peux pas plus avancer sur la question des IPO. En effet, la base ne semble pas permettre de repérer en quelle année l'ipo a été faite. Il faut soit que l'on trouve un élément à discuter ensemble ; soit que l'on fabrique une base de donnée des années d'IPO à la main (sachant qu'il y a 288 entreprises concernées dans la base).**
+
+## Intervalle entre deux rounds
+
+On travaille désormais sur l'intervalle entre deux round successifs de funding.
+
+```{r delay_init}
+delay <- fnd %>% 
+  distinct(company_uuid, announced_on, .keep_all = TRUE) %>% #enlever les doublons: deux fnd le même jour
+  group_by(company_uuid) %>% 
+  arrange(announced_on) %>% 
+  mutate(delay = announced_on - lag(announced_on)) %>% 
+  arrange(company_name) %>% 
+  filter(!is.na(delay))
+```
+
+La distribution de cette variable dans la base. On est sur une fréquence plus importante que une fois tous les 18 mois.
+
+```{r distrib_delay, fig.cap = "Distribution du délai entre deux levées de fond. La barre verticale indique 18 mois"}
+ggplot(delay, aes(delay)) +
+  geom_histogram() +
+  geom_vline(aes(xintercept = 365*1.5)) +
+  scale_x_continuous(limits = c(0, 365*5), breaks = seq(0, 365*5, 365/4), labels = seq(0, 12*5, 3)) +
+  labs(x = "Delai entre deux rounds (en mois)")
+```
+
+La même distribution, mais année par année.
+
+```{r distrib_delay_year, fig.cap = "Distribution du délai entre deux levées de fond, par année", fig.height=16}
+filter(delay, year(announced_on) > 1998) %>% 
+ggplot(aes(delay)) +
+  geom_histogram() +
+  geom_vline(aes(xintercept = 365*1.5)) +
+  facet_wrap(~year(announced_on), scales = "free", ncol = 3) +
+  scale_x_continuous(limits = c(0, 365*5), breaks = seq(0, 365*5, 365/4), labels = seq(0, 12*5, 3)) +
+  labs(x = "Delai entre deux rounds (en mois)")
+```
+
+## Intervalle entre deux rounds, uniquement pour les "series".
+
+L'analyse de la section précédente infirme notre croyance en une moyenne de 18 mois entre deux séries d'investissements. C'est peut-être que l'on surestime les petits investissements? Limitons nous aux investissements dits de série A/B/C/D... (plus angel et seed pour avoir un point d'où partir)
+
+```{r delay_series_init}
+delay <- fnd %>% 
+  distinct(company_uuid, announced_on, .keep_all = TRUE) %>% #enlever les doublons: deux fnd le même jour
+  filter(str_detect(investment_type, "series_[a-j]") | investment_type %in% c("seed", "angel")) %>% 
+  group_by(company_uuid) %>% 
+  arrange(announced_on) %>% 
+  mutate(delay = announced_on - lag(announced_on)) %>% 
+  arrange(company_name) %>% 
+  filter(!is.na(delay), str_detect(investment_type, "series_[a-j]"))
+```
+
+La distribution est plus jolie, avec une concentration un peu avant les 18 mois
+
+```{r distrib_delay_series, fig.cap = "Distribution du délai entre deux levées de fond. La barre verticale indique 18 mois"}
+ggplot(delay, aes(delay)) +
+  geom_histogram() +
+  geom_vline(aes(xintercept = 365*1.5)) +
+  scale_x_continuous(limits = c(0, 365*5), breaks = seq(0, 365*5, 365/4), labels = seq(0, 12*5, 3)) +
+  labs(x = "Delai entre deux rounds (en mois)")
+```
+
+```{r distrib_delay_series_year, fig.cap = "Distribution du délai entre deux levées de fond, par année", fig.height=16}
+filter(delay, year(announced_on) > 1998) %>% 
+ggplot(aes(delay)) +
+  geom_histogram() +
+  geom_vline(aes(xintercept = 365*1.5)) +
+  facet_wrap(~year(announced_on), scales = "free", ncol = 3) +
+  scale_x_continuous(limits = c(0, 365*5), breaks = seq(0, 365*5, 365/4), labels = seq(0, 12*5, 3)) +
+  labs(x = "Delai entre deux rounds (en mois)")
+```
+
+Questions pour la suite:
+
++ quelles variables sont susceptibles d'avoir un effet là dessus?
+
+## Distribution du nombre de fundings
+
+```{r fnd_nb_distrib, fig.cap = "Distribution du nombre de funding round renseigné par compagnie"}
+count(fnd, company_uuid) %>% 
+  ggplot(aes(n)) +
+    geom_histogram() +
+    scale_y_log10()
+```
+
+```{r fnd_nb_X_nb_inv, fig.cap = "Nombre d'investisseurs unique X nombre de funding round par compagnie"}
+
+group_by(fnd, company_uuid) %>% 
+  separate_rows(investor_uuids, sep = ",") %>% 
+  summarize(fnd = n_distinct(funding_round_uuid),
+            inv = n_distinct(investor_uuids)) %>% 
+  ggplot(aes(fnd, inv)) +
+    geom_point(position = "jitter") +
+    labs(x = "Nombre de rounds de fundings",
+         y = "Nombre d'investisseurs")
+
+```
+
+
+```{r}
+ggplot(fnd, aes(investor_count)) + geom_histogram() + scale_y_log10()
+```
+
+# Investissement
+
+<!-- D'où vient l'argent? D'abord, seed, souvent en nom propre. Venture capital. Première strate: boutique VC. -->
+
+<!-- Hypothèse OA: silos des financeurs. Plus une boite de VC est grosse et plus elle est diversifiée. Boutique VC plus spécialisés que les autres.  -->
+
+<!-- Autre hypothèse OA: des angels, des boutiques VC, des VC institutionnels (une vingtaine, repérables à la main par OA), corporate VC (google, apple, facebook ; entrée double par l'argent: investissements et acquisitions), industriels et boites/financeurs classiques (esp. banques d'affaire), equity (bourses, fonds de pension [retraités de Californie, professeurs de Californie]), hedge funds (fonds souverains, investissements). -->
+
+<!-- => Combien de VC? Combien d'investisseurs différents? Combien d'investissements par investisseurs (en nombre et en montant) ? -->
+<!-- => fabriquer une mesure de l'importance des investisseurs à partir du nombre total d'investissement + du montant moyen / montant total + quel est le round max/l'investissement max (force ponctuelle de frappe). -->
+
+## Montant investis par round
+
+```{r invest_x_round}
+group_by(fnd, investment_type) %>% 
+  quant_summary("raised_amount_usd") %>%
+  mutate_if(is.numeric, function(x) formatC(x, format = "f", big.mark = " ", digits = 0)) %>% 
+  kable(caption = "Montant investi par round et par type de round")
+```
+
+## Nombre investisseurs
+
+On calcule le nombre d'investisseurs par round.
+```{r investors}
+fnd <- separate_rows(fnd, investor_uuids, sep = ",") %>% 
+  group_by(funding_round_uuid) %>% 
+  filter(investor_uuids != "") %>% 
+  summarize(nb_investors = n()) %>% 
+  right_join(fnd) %>% 
+  mutate(nb_investors = ifelse(is.na(nb_investors), 0, nb_investors))
+```
+
+```{r nb_investors_hist, fig.cap = "Nombre d'investisseurs différents par round"}
+ggplot(fnd, aes(nb_investors)) +
+  geom_histogram() +
+  scale_y_log10() +
+  scale_x_continuous(breaks = 1L:6L)
+```
+
+Le nombre d'investisseurs dépend-il du type de round?
+
+```{r}
+group_by(fnd, investment_type) %>% 
+  summarize(nb_moy_investors = mean(nb_investors)) %>% 
+  arrange(desc(nb_moy_investors)) %>% 
+  kable(caption = "Nombre moyen d'investisseurs par type de rounds")
+```
+
+Dépend-il du montant investi ? Pas vraiment. Plutôt: plus on augmente le nombre d'investisseurs et plus le montant médian et moyen investis sont élevés, et plus le montant minimal investi est élevé. Mais la dispersion est plus grande avec peu d'investisseurs et les investissements les plus conséquents se font avec peu d'investisseurs (un ou deux).
+
+```{r}
+ggplot(fnd, aes(factor(nb_investors), raised_amount_usd)) +
+  geom_boxplot() +
+  scale_y_log10()
+```
+
+## Description des investisseurs
+
+On commence par calculer quelques indicateurs à partir de la base fundings.
+
++ nombre d'investissements réalisés ;
++ somme du montant total des investissements réalisés (sans pondération => un petit investisseur bénéficie sur cela des sommes investies par un gros pour le même round);
++ montant pondéré d'investissements (divisé par le nombre d'investisseurs => on postule que chacun participe à même hauteur)
+
+**Attention: de nombreux investissements ne sont pas renseignés => on sous-estime les montants pour les boites qui ne déclarent pas les investissements**
+
+```{r inv_init}
+inv <- separate_rows(fnd, investor_uuids, sep = ",") %>% 
+  group_by(investor_uuids) %>% 
+  summarise(nb_investments = n(),
+            total_pond_investment = sum(raised_amount_usd / nb_investors, na.rm = TRUE),
+            total_raw_investment = sum(raised_amount_usd, na.rm = TRUE),
+            nb_missing_amount = sum(is.na(raised_amount_usd))) %>% 
+  right_join(inv, by = c("investor_uuids" = "uuid")) %>% 
+  rename(uuid = "investor_uuids")
+```
+
+```{r nb_investments_hist, fig.cap = "Distribution du nombre d'investissements réalisés par investisseur"}
+ggplot(inv, aes(nb_investments)) +
+  geom_histogram() +
+  scale_y_log10()
+```
+
+```{r total_raw_investment_hist, fig.cap = "Distribution de la somme totale des investissements"}
+ggplot(inv, aes(total_raw_investment)) +
+  geom_histogram() +
+#  scale_y_log10() +
+  scale_x_log10()
+```
+
+```{r total_pond_investment_hist, fig.cap = "Distribution de la somme totale pondérée des investissements"}
+ggplot(inv, aes(total_pond_investment)) +
+  geom_histogram() +
+#  scale_y_log10() +
+  scale_x_log10()
+```
+
+```{r total_pond_investment_moy_hist, fig.cap = "Distribution de l'investissement pondéré moyen (total / nb investissements)"}
+ggplot(inv, aes(total_pond_investment / nb_investments)) +
+  geom_histogram() +
+#  scale_y_log10() +
+  scale_x_log10()
+```
+
+Les investisseurs qui ressortent le plus en montant total investi / en nombre d'investissements différents
+
+```{r}
+arrange(inv, desc(total_pond_investment)) %>% 
+  select(company_name, nb_investments:nb_missing_amount, country_code) %>% 
+  mutate_if(is.numeric, function(x) formatC(x, format = "f", big.mark = " ", digits = 0)) %>% 
+  slice(1:50) %>% 
+  kable(caption = "Les cinquantes investisseurs ayant investi le plus d'argent")
+```
+
+Attention, tous les investissements ne sont pas renseignés ici.
+
+```{r}
+arrange(inv, desc(nb_investments)) %>% 
+  select(company_name, nb_investments:nb_missing_amount) %>% 
+  mutate_if(is.numeric, function(x) formatC(x, format = "f", big.mark = " ", digits = 0)) %>% 
+  slice(1:50) %>% 
+  kable(caption = "Les cinquantes investisseurs ayant fait le plus d'investissements différents")
+```
+
+Manque à regarder dans quels rounds ces investisseurs investissent; ainsi que dans quelles catégories?
+
+<!-- # Réseaux -->
+
+<!-- Scraper linkedin pour les gens qui ont un profil renseigné? -->
+
+<!-- Sociologie économique des boards ? -->
+
+# Promesse
+
+<!-- On ne peut pas savoir comment l'industie va évoluer, mais on sait ce qu'elle promet. Dans quelles technologies est-ce que les GAFAM investissent? -->
+
+<!-- => prendre les boites qui sont aussi investisseurs : dans quelles catégories est-ce qu'elles acquièrent ? = distribution et graph bipartite sur catégories/boites restreint aux boites de status == "acquired" -->
+
+```{r}
+filter(inv, primary_role == "company") %>% 
+  select(company_name, nb_investments:nb_missing_amount) %>% 
+  mutate_if(is.numeric, function(x) formatC(x, format = "f", big.mark = " ", digits = 0)) %>% 
+  arrange(desc(nb_investments)) %>% 
+  slice(1:50) %>% 
+  kable(caption = "Les cinquantes entreprises qui sont également investisseurs ayant fait le plus d'investissements différents")
+```
+
+Quelles sont les catégories dans lesquelles investissent ces boites?
+
+```{r}
+compinv <- filter(inv, primary_role == "company") %>% pull(uuid)
+
+ent_inv <- separate_rows(fnd, investor_uuids, sep = ",") %>% 
+  filter(investor_uuids %in% compinv) %>% 
+  pull(company_uuid)
+```
+
+```{r}
+filter(org, uuid %in% ent_inv) %>% 
+  separate_rows(category_group_list, sep = ",") %>% 
+  group_by(uuid) %>% 
+  mutate(n = n()) %>% 
+  group_by(category_group_list) %>% 
+  summarise(eff = n(),
+            eff_pond = sum(1/n)) %>% 
+  mutate(prop = eff / sum(eff) * 100,
+         prop_pond = eff_pond / sum(eff_pond) * 100) %>% 
+  arrange(desc(eff)) %>% 
+  select(category_group_list, eff, prop, eff_pond, prop_pond) %>% 
+  kable(caption = "Distribution des groupes de catégories pour les entreprises dans lesquelles d'autres entreprises de la liste investissent", digits = 1)
+```
+
+```{r}
+filter(org, uuid %in% ent_inv) %>% 
+  separate_rows(category_list, sep = ",") %>% 
+  group_by(uuid) %>% 
+  mutate(n = n()) %>% 
+  group_by(category_list) %>% 
+  summarise(eff = n(),
+            eff_pond = sum(1/n)) %>% 
+  mutate(prop = eff / sum(eff) * 100,
+         prop_pond = eff_pond / sum(eff_pond) * 100) %>% 
+  arrange(desc(eff)) %>% 
+  select(category_list, eff, prop, eff_pond, prop_pond) %>% 
+  slice(1:100) %>% 
+  kable(caption = "Distribution des 100 premières catégories pour les entreprises dans lesquelles d'autres entreprises de la liste investissent", digits = 1)
+```
+
