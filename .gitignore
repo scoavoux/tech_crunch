@@ -5,5 +5,8 @@
 .here
 *.Rproj
 *.xlsx
-data/fundings.csv
-data/organizations.csv
+data/*
+data_sampled/*
+Publications/*
+*.html
+*.pdf
