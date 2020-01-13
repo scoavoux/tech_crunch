@@ -3,6 +3,13 @@ library(lubridate) # charger avant here pour éviter conflit
 library(stringr)
 library(here)
 
+## Données téléchargées avec
+# https://api.crunchbase.com/bulk/v4/bulk_export.tar.gz?user_key=ad5a2e7b805d09b373251ab2fb2385e3
+
+# Idée: on crée une base de donnée à jour au 31/12/2019
+date_lim <- ymd("20191231")
+
+
 ###### Import des bases de données ######
 
 # Importer la base organisations, en supprimant les variables inutiles
@@ -124,8 +131,12 @@ org <- filter(org, str_detect(roles, "company"))
 org <- filter(org, uuid %in% unique(fnd$org_uuid))
 
 ###### Restreindre base des financements ######
+## À ceux fait dans des organisations de la base
 ## ~39k fnd.
 fnd <- filter(fnd, org_uuid %in% org$uuid)
+
+## À ceux fait avant le 1er janvier 2020
+fnd <- filter(fnd, announced_on <= date_lim)
 
 ###### Enrichir base des investissements ######
 
@@ -135,6 +146,21 @@ iv <- read_csv(here("data", "investments.csv")) %>%
   select(-rank) %>% 
   filter(funding_round_uuid %in% fnd$uuid) %>% 
   mutate(is_lead_investor = ifelse(is.na(is_lead_investor), FALSE, is_lead_investor))
+
+## Note de Fabien: il y a quelques investisseurs qui apparaissent en double sur certain round...
+## Pourquoi? En fait, pas le même investment_uuid... Décalage de peut-être 30 lignes.
+## Donc, on laisse tomber ces lignes dupliquées. Quand is_lead_investor, on laisse tomber l'autre.
+iv <- group_by(iv, funding_round_uuid, investor_uuid) %>% 
+  mutate(n = n(), 
+         c = ifelse(n > 1, 
+                    ifelse(is_lead_investor,
+                           1,
+                           0), 
+                    1)) %>% 
+  ungroup() %>% 
+  filter(c > 0.5) %>% 
+  select(-n) %>% 
+  distinct(funding_round_uuid, investor_uuid, .keep_all = TRUE)
 
 ## On commence par examiner les lead investors décrits dans les deux bases
 
@@ -193,20 +219,16 @@ fnd <- filter(iv, !is_lead_investor) %>%
 
 ###### Créer base des acquisitions ######
 
-acq <- read_csv(here("data", "acquisitions.csv")) %>% 
-  filter(acquiree_uuid %in% org$uuid)
+acq <- read_csv(here("data", "acquisitions.csv"))
 
-## 3553 acquisitions répértoriées de 3417 entreprises
-## Là, encore, plus que de compagnies marques comme acquired dans la base
-## org, avec le reste en closed.
-# mutate(org, acquired = ifelse(uuid %in% acq$acquiree_uuid, "yes", "no")) %>% 
-#    tabyl(acquired, status)
-# Seulement 1231 entreprises acquisitrices sont dans la base des organisations
-# sum(acq$acquirer_uuid %in% org$uuid)
-# sum(acq$acquirer_uuid %in% inv$uuid)
-# 
-# 2110 entreprises acquisitrices répertoriées
-# length(unique(acq$acquirer_uuid))
+## Filter par date
+acq <- filter(acq, acquired_on <= date_lim)
+
+## Pour les acquisitions, on veut deux choses:
+## Les entreprises de la base org qui ont été acquises par une autre, ou qu'elles soient
+## Les entreprises acquises par des entreprises de la base org, où qu'elles soient
+
+acq <- filter(acq, acquiree_uuid %in% org$uuid | acquirer_uuid %in% org$uuid) 
 
 ###### Créer base des investisseurs ######
 
