@@ -59,6 +59,8 @@ o <- read_csv(here("data", "organizations.csv"),
                   )
               )
 
+o <- rename(o, org_uuid = "uuid")
+
 # Importer la base des financements
 fnd <- read_csv(here("data", "funding_rounds.csv"),
                 col_types = cols_only(
@@ -88,6 +90,8 @@ fnd <- read_csv(here("data", "funding_rounds.csv"),
                   lead_investor_uuids = col_character()
                 )
                 )
+
+fnd <- rename(fnd, funding_round_uuid = "uuid")
 
 ###### Restriction base des entreprises ######
 
@@ -128,12 +132,12 @@ org <- filter(org, str_detect(roles, "company"))
 
 ## Supprimer les entreprises qui n'ont pas de rounds d'investissement renseigné
 ## ~16k org.
-org <- filter(org, uuid %in% unique(fnd$org_uuid))
+org <- filter(org, org_uuid %in% unique(fnd$org_uuid))
 
 ###### Restreindre base des financements ######
 ## À ceux fait dans des organisations de la base
 ## ~39k fnd.
-fnd <- filter(fnd, org_uuid %in% org$uuid)
+fnd <- filter(fnd, org_uuid %in% org$org_uuid)
 
 ## À ceux fait avant le 1er janvier 2020
 fnd <- filter(fnd, announced_on <= date_lim)
@@ -144,7 +148,8 @@ fnd <- filter(fnd, announced_on <= date_lim)
 
 iv <- read_csv(here("data", "investments.csv")) %>% 
   select(-rank) %>% 
-  filter(funding_round_uuid %in% fnd$uuid) %>% 
+  rename(investment_uuid = "uuid") %>% 
+  filter(funding_round_uuid %in% fnd$funding_round_uuid) %>% 
   mutate(is_lead_investor = ifelse(is.na(is_lead_investor), FALSE, is_lead_investor))
 
 ## Note de Fabien: il y a quelques investisseurs qui apparaissent en double sur certain round...
@@ -165,13 +170,12 @@ iv <- group_by(iv, funding_round_uuid, investor_uuid) %>%
 ## On commence par examiner les lead investors décrits dans les deux bases
 
 fnd_li <- separate_rows(fnd, lead_investor_uuids, sep = ",") %>%
-  select(uuid, lead_investor_uuids) %>%
+  select(funding_round_uuid, lead_investor_uuids) %>%
   filter(!is.na(lead_investor_uuids)) %>%
-  arrange(uuid, lead_investor_uuids)
+  arrange(funding_round_uuid, lead_investor_uuids)
 
 iv_li <- filter(iv, is_lead_investor) %>%
-  select(funding_round_uuid, investor_uuid, uuid) %>%
-  rename(investment_uuid = "uuid") %>% 
+  select(funding_round_uuid, investor_uuid, investment_uuid) %>%
   arrange(funding_round_uuid, investor_uuid)
 
 ## Dans quelques situations rares, les lead_investor sont renseignés dans la
@@ -191,10 +195,10 @@ iv_li <- filter(iv, is_lead_investor) %>%
 # si l'on veut le plus complet des deux, on peux
 # Du coup, on fusionne les deux bases et on repart de là pour recréer une variable lead_investor_uuids complète
 
-full_li <- full_join(fnd_li, iv_li, by = c(uuid = "funding_round_uuid", lead_investor_uuids = "investor_uuid"))
-fnd <- group_by(full_li, uuid) %>% 
+full_li <- full_join(fnd_li, iv_li, by = c(funding_round_uuid = "funding_round_uuid", lead_investor_uuids = "investor_uuid"))
+fnd <- group_by(full_li, funding_round_uuid) %>% 
   summarise(lead_investor_uuids_neat = paste(lead_investor_uuids, collapse = ","),
-            lead_investment_uuids_neat = paste(lead_investor_uuids, collapse = ",")) %>% 
+            lead_investment_uuids_neat = paste(investment_uuid, collapse = ",")) %>% 
   right_join(fnd)
 
 rm(iv_li, fnd_li, full_li)
@@ -202,24 +206,23 @@ rm(iv_li, fnd_li, full_li)
 ## Ensuite, on récupère la liste complète des investisseurs depuis la base iv
 
 fnd <- group_by(iv, funding_round_uuid) %>% 
-  summarise(full_investment_uuids = paste(uuid, collapse = ","),
+  summarise(full_investment_uuids = paste(investment_uuid, collapse = ","),
             full_investor_uuids = paste(investor_uuid, collapse = ",")) %>% 
-  right_join(fnd, by = c(funding_round_uuid = "uuid")) %>% 
-  rename(uuid = funding_round_uuid)
+  right_join(fnd, by = c("funding_round_uuid"))
 
 ## Enfin, on récupère la liste des investisseurs non-lead
 
 fnd <- filter(iv, !is_lead_investor) %>% 
   group_by(funding_round_uuid) %>% 
-  summarise(nonlead_investment_uuids = paste(uuid, collapse = ","),
+  summarise(nonlead_investment_uuids = paste(investment_uuid, collapse = ","),
             nonlead_investor_uuids = paste(investor_uuid, collapse = ",")) %>% 
-  right_join(fnd, by = c(funding_round_uuid = "uuid")) %>% 
-  rename(uuid = funding_round_uuid)
-
+  right_join(fnd, by = "funding_round_uuid")
 
 ###### Créer base des acquisitions ######
 
 acq <- read_csv(here("data", "acquisitions.csv"))
+
+acq <- rename(acq, acquisition_uuid = "uuid")
 
 ## Filter par date
 acq <- filter(acq, acquired_on <= date_lim)
@@ -228,7 +231,7 @@ acq <- filter(acq, acquired_on <= date_lim)
 ## Les entreprises de la base org qui ont été acquises par une autre, ou qu'elles soient
 ## Les entreprises acquises par des entreprises de la base org, où qu'elles soient
 
-acq <- filter(acq, acquiree_uuid %in% org$uuid | acquirer_uuid %in% org$uuid) 
+acq <- filter(acq, acquiree_uuid %in% org$org_uuid | acquirer_uuid %in% org$org_uuid) 
 
 ###### Créer base des investisseurs ######
 
@@ -261,19 +264,22 @@ inv <- read_csv(here("data", "investors.csv"),
                 # logo_url = col_character()
                 ))
 
+inv <- rename(inv, investor_uuid = "uuid")
+
 x <- separate_rows(fnd, full_investor_uuids, sep = ",") %>% 
   distinct(full_investor_uuids) %>% 
   filter(!is.na(full_investor_uuids))
 
-inv <- filter(inv, uuid %in% x$full_investor_uuids)
+inv <- filter(inv, investor_uuid %in% x$full_investor_uuids)
 
-inv_acq <- filter(o, uuid %in% acq$acquirer_uuid)
+inv_acq <- filter(o, org_uuid %in% acq$acquirer_uuid)
 
 ###### Créer base des ipos ######
 
 ipo <- read_csv(here("data", "ipos.csv")) %>% 
-  filter(org_uuid %in% org$uuid)
+  filter(org_uuid %in% org$org_uuid)
 
+ipo <- rename(ipo, ipo_uuid = "uuid")
 ## 503 ipo répértoriés pour 486 entreprises
 ## Problème: il y en a plus qu'il n'y a d'ipo répertoriés
 ## dans la base org... Parce que ont pu faire l'objet d'acquisition

@@ -61,7 +61,7 @@ La figure suivante décrit le nombre de catégorie par entreprise.
 ```{r category_group_n_boxplot, fig.cap = "Distribution du nombre de catégories par entreprises"}
 sp <- separate_rows(org, category_groups_list, sep = ",") %>% filter(!is.na(category_groups_list))
 sp %>% 
-  count(uuid) %>% 
+  count(org_uuid) %>% 
   ggplot(aes(0, n)) +
     geom_boxplot(width = 0.5) +
     scale_x_continuous(limits = c(-1, 1), labels = NULL) +
@@ -70,7 +70,7 @@ sp %>%
 ```
 
 ```{r}
-count(sp, uuid) %>% 
+count(sp, org_uuid) %>% 
   summarise(mean = mean(n),
             sd = sd(n)) %>% 
   kable(caption = "Distribution of number of different categories")
@@ -82,8 +82,8 @@ On calcule l'effectif brut (nombre de fois que la catégorie apparaît, chaque e
 
 ```{r category_group_distrib}
 tb <- sp %>% 
-  select(uuid, category_groups_list) %>% 
-  group_by(uuid) %>% 
+  select(org_uuid, category_groups_list) %>% 
+  group_by(org_uuid) %>% 
   mutate(n = n()) %>% 
   group_by(category_groups_list) %>% 
   summarise(eff = n(),
@@ -124,7 +124,7 @@ On étudie la variable category_list qui rassemble les catégories auxquelles l'
 sp <- separate_rows(org, category_list, sep = ",") %>% 
   filter(!is.na(category_list))
 sp %>% 
-  count(uuid) %>% 
+  count(org_uuid) %>% 
   ggplot(aes(0, n)) +
     geom_boxplot(width = 0.5) +
     scale_x_continuous(limits = c(-1, 1), labels = NULL) +
@@ -133,7 +133,7 @@ sp %>%
 ```
 
 ```{r}
-count(sp, uuid) %>% 
+count(sp, org_uuid) %>% 
   summarise(mean = mean(n),
             sd = sd(n)) %>% 
   kable(caption = "Distribution of number of different categories")
@@ -143,8 +143,8 @@ La distribution des catégories des entreprises de la base. Effectif brute compt
 
 ```{r category_distrib}
 tb <- sp %>% 
-  select(uuid, category_list) %>% 
-  group_by(uuid) %>% 
+  select(org_uuid, category_list) %>% 
+  group_by(org_uuid) %>% 
   mutate(n = n()) %>% 
   group_by(category_list) %>% 
   summarise(eff = n(),
@@ -215,7 +215,7 @@ org_ipo <- group_by(ipo, org_uuid) %>%
   mutate(n_ipo = n()) %>% 
   slice(1) %>% 
   ungroup() %>% 
-  select(uuid = org_uuid,
+  select(org_uuid,
          went_public_on,
          org_name,
          share_price_usd,
@@ -338,7 +338,7 @@ count(fnd, org_uuid) %>%
 ```{r fnd_nb_X_nb_lead_inv, fig.cap = "Nombre d'investisseurs leaders unique X nombre de funding round par compagnie"}
 sl <- separate_rows(fnd, lead_investor_uuids, sep = ",")
 group_by(sl, org_uuid) %>% 
-  summarize(fnd = n_distinct(uuid),
+  summarize(fnd = n_distinct(funding_round_uuid),
             inv = n_distinct(lead_investor_uuids)) %>% 
   ggplot(aes(fnd, inv)) +
     geom_point(position = "jitter") +
@@ -355,7 +355,7 @@ ggplot(fnd, aes(investor_count)) + geom_histogram() + scale_y_log10()
 ```{r fnd_nb_X_nb_full_inv, fig.cap = "Nombre d'investisseurs unique X nombre de funding round par compagnie"}
 sf <- separate_rows(fnd, full_investor_uuids, sep = ",")
 group_by(sf, org_uuid) %>% 
-  summarize(fnd = n_distinct(uuid),
+  summarize(fnd = n_distinct(funding_round_uuid),
             inv = n_distinct(full_investor_uuids)) %>% 
   ggplot(aes(fnd, inv)) +
     geom_point(position = "jitter") +
@@ -367,7 +367,7 @@ group_by(sf, org_uuid) %>%
 ```{r}
 group_by(sf, org_uuid) %>% 
   summarize(inv = n_distinct(full_investor_uuids)) %>% 
-  left_join(select(org, org_uuid = uuid, total_funding_usd)) %>% 
+  left_join(select(org, org_uuid, total_funding_usd)) %>% 
   ggplot(aes(total_funding_usd, inv)) +
     geom_point(position = "jitter") +
     scale_x_log10() +
@@ -412,10 +412,15 @@ group_by(fnd, investment_type) %>%
 On calcule le nombre d'investisseurs par round.
 
 ```{r investors}
-fnd <- group_by(sf, uuid) %>% 
+fnd <- group_by(sf, funding_round_uuid) %>% 
   filter(full_investor_uuids != "") %>% 
   summarize(nb_investors = n()) %>% 
   right_join(fnd) %>% 
+  mutate(nb_investors = ifelse(is.na(nb_investors), 0, nb_investors))
+sf <- group_by(sf, funding_round_uuid) %>% 
+  filter(full_investor_uuids != "") %>% 
+  summarize(nb_investors = n()) %>% 
+  right_join(sf) %>% 
   mutate(nb_investors = ifelse(is.na(nb_investors), 0, nb_investors))
 ```
 
@@ -460,8 +465,8 @@ inv <- sf %>%
             total_pond_investment = sum(raised_amount_usd / nb_investors, na.rm = TRUE),
             total_raw_investment = sum(raised_amount_usd, na.rm = TRUE),
             nb_missing_amount = sum(is.na(raised_amount_usd))) %>% 
-  right_join(inv, by = c("full_investor_uuids" = "uuid")) %>% 
-  rename(uuid = "full_investor_uuids")
+  right_join(inv, by = c("full_investor_uuids" = "investor_uuid")) %>% 
+  rename("investor_uuid" = "full_investor_uuids")
 ```
 
 ```{r nb_investments_hist, fig.cap = "Distribution du nombre d'investissements réalisés par investisseur"}
