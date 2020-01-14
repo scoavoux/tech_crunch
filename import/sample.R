@@ -283,6 +283,45 @@ ipo <- read_csv(here("data", "ipos.csv")) %>%
 # mutate(org, ipo = ifelse(uuid %in% ipo$org_uuid, "yes", "no")) %>% 
 #  tabyl(ipo, status)
 
+###### Corriger les montants de l'inflation ######
+
+# données sur l'inflation récupéré sur l'OCDE:
+# https://data.oecd.org/fr/price/inflation-ipc.htm
+
+# On importe seulement les données pour les USA, annuelles,
+# en index 100 en 2015
+
+inf <- read_csv(here("data", "inflation_OECD.csv")) %>% 
+  select(-`Flag Codes`) %>% 
+  filter(LOCATION == "USA",
+         SUBJECT == "TOT",
+         FREQUENCY == "A",
+         MEASURE == "IDX2015") %>% 
+  mutate(Value = Value / 100)
+
+
+# Recodage: on transforme les variables décrivant des sommes en variables
+# corrigées de l'inflation
+
+fnd <- mutate(fnd, TIME = year(announced_on)) %>% 
+  left_join(select(inf, TIME, Value)) %>% 
+  mutate(raised_amount_usd_corr        = raised_amount_usd / Value,
+         post_money_valuation_usd_corr = post_money_valuation_usd / Value) %>% 
+  select(-TIME, -Value)
+
+acq <- mutate(acq, TIME = year(acquired_on)) %>% 
+  left_join(select(inf, TIME, Value)) %>% 
+  mutate(price_usd_corr        = price_usd / Value) %>% 
+  select(-TIME, -Value)
+
+ipo <- mutate(ipo, TIME = year(went_public_on)) %>% 
+  left_join(select(inf, TIME, Value)) %>% 
+  mutate(share_price_usd_corr  = share_price_usd / Value,
+         valuation_price_usd_corr = valuation_price_usd / Value,
+         money_raised_usd_corr = money_raised_usd / Value) %>% 
+  select(-TIME, -Value)
+
+
 ###### Netoyer les bases ######
 
 ## Supprimer tous les sauts de ligne ainsi que les dièses
