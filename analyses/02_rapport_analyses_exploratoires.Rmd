@@ -218,9 +218,9 @@ org_ipo <- group_by(ipo, org_uuid) %>%
   select(org_uuid,
          went_public_on,
          org_name,
-         share_price_usd,
-         valuation_price_usd,
-         money_raised_usd,
+         share_price_usd_corr,
+         valuation_price_usd_corr,
+         money_raised_usd_corr,
          n_ipo) %>% 
   left_join(org)
 ```
@@ -326,6 +326,49 @@ Questions pour la suite:
 
 + quelles variables sont susceptibles d'avoir un effet là dessus?
 
+## Qui fait des ipo?
+
+```{r}
+tb <- separate_rows(org_ipo, category_groups_list, sep = ",") %>% 
+  filter(!is.na(category_groups_list)) %>% 
+  select(org_uuid, category_groups_list) %>% 
+  group_by(org_uuid) %>% 
+  mutate(n = n()) %>% 
+  group_by(category_groups_list) %>% 
+  summarise(eff = n(),
+            eff_pond = sum(1/n)) %>% 
+  mutate(prop_cat = eff / sum(eff) * 100,
+         prop_ent = eff / nrow(org) * 100,
+         prop_pond = eff_pond / sum(eff_pond) * 100) %>% 
+  arrange(desc(eff)) %>% 
+  select(category_groups_list, eff, prop_cat, prop_ent, eff_pond, prop_pond)
+
+kable(tb, caption = "Distribution des groupes de catégories des boites qui font des ipos", digits = 1)
+```
+
+
+```{r}
+tb <- separate_rows(org_ipo, category_list, sep = ",") %>% 
+  filter(!is.na(category_list)) %>% 
+  select(org_uuid, category_list) %>% 
+  group_by(org_uuid) %>% 
+  mutate(n = n()) %>% 
+  group_by(category_list) %>% 
+  summarise(eff = n(),
+            eff_pond = sum(1/n)) %>% 
+  mutate(prop_cat = eff / sum(eff) * 100,
+         prop_ent = eff / nrow(org) * 100,
+         prop_pond = eff_pond / sum(eff_pond) * 100) %>% 
+  arrange(desc(eff)) %>% 
+  select(category_list, eff, prop_cat, prop_ent, eff_pond, prop_pond) %>% 
+  slice(1:50)
+
+kable(tb, caption = "Distribution des catégories des boites qui font des ipos (50 premières)", digits = 1)
+```
+
+
+
+
 ## Distribution du nombre de fundings
 
 ```{r fnd_nb_distrib, fig.cap = "Distribution du nombre de funding round renseigné par compagnie"}
@@ -402,7 +445,7 @@ On compte `r nrow(inv)` investisseurs ayant investi au moins une fois.
 
 ```{r invest_x_round}
 group_by(fnd, investment_type) %>% 
-  quant_summary("raised_amount_usd") %>%
+  quant_summary("raised_amount_usd_corr") %>%
   mutate_if(is.numeric, function(x) formatC(x, format = "f", big.mark = " ", digits = 0)) %>% 
   kable(caption = "Montant investi par round et par type de round")
 ```
@@ -443,7 +486,7 @@ group_by(fnd, investment_type) %>%
 Dépend-il du montant investi ?
 
 ```{r}
-ggplot(fnd, aes(factor(nb_investors), raised_amount_usd)) +
+ggplot(fnd, aes(factor(nb_investors), raised_amount_usd_corr)) +
   geom_boxplot() +
   scale_y_log10()
 ```
@@ -462,11 +505,19 @@ On commence par calculer quelques indicateurs à partir de la base fundings.
 inv <- sf %>% 
   group_by(full_investor_uuids) %>% 
   summarise(nb_investments = n(),
-            total_pond_investment = sum(raised_amount_usd / nb_investors, na.rm = TRUE),
-            total_raw_investment = sum(raised_amount_usd, na.rm = TRUE),
-            nb_missing_amount = sum(is.na(raised_amount_usd))) %>% 
+            total_pond_investment = sum(raised_amount_usd_corr / nb_investors, na.rm = TRUE),
+            total_raw_investment = sum(raised_amount_usd_corr, na.rm = TRUE),
+            nb_missing_amount = sum(is.na(raised_amount_usd_corr))) %>% 
   right_join(inv, by = c("full_investor_uuids" = "investor_uuid")) %>% 
   rename("investor_uuid" = "full_investor_uuids")
+
+inv <- sl %>% 
+  group_by(lead_investor_uuids) %>% 
+  summarise(nb_lead_investments = n(),
+            total_raw_lead_investment = sum(raised_amount_usd_corr, na.rm = TRUE),
+            nb_lead_missing_amount = sum(is.na(raised_amount_usd_corr))) %>% 
+  right_join(inv, by = c("lead_investor_uuids" = "investor_uuid")) %>% 
+  rename("investor_uuid" = "lead_investor_uuids")
 ```
 
 ```{r nb_investments_hist, fig.cap = "Distribution du nombre d'investissements réalisés par investisseur"}
@@ -518,6 +569,32 @@ arrange(inv, desc(nb_investments)) %>%
 
 Manque à regarder dans quels rounds ces investisseurs investissent; ainsi que dans quelles catégories?
 
+## Géographie
+
+D'où viennent les investisseurs ? On commence par ignorer ceux dont on ignrore le pays (tout de même 16,4% => il faudrait vraiment faire quelque chose dessus).
+
+La domination des US est sans appel: 70% des investisseurs uniques, et plus de 80% des investissements, qu'on les compte en nombre d'investissements ou en montant investi.
+
+```{r}
+x <- 
+  filter(inv, !is.na(country_code)) %>% 
+  group_by(country_code) %>% 
+  summarise(n_investors = n(),
+            n_investments = sum(nb_investments),
+            n_lead_investments = sum(nb_lead_investments, na.rm = TRUE),
+            total_sum_invested_raw = sum(total_raw_investment, na.rm = TRUE) %>% accounting(),
+            total_sum_invested_pond = sum(total_pond_investment, na.rm = TRUE) %>% accounting())
+
+x <- mutate_at(x, vars(n_investors:total_sum_invested_pond), function(x){(x/ sum(x))*100}) %>% 
+  rename_at(vars(n_investors:total_sum_invested_pond), ~paste0(., "_prop")) %>% 
+  left_join(x)
+
+select(x, sort(names(x))) %>% 
+  arrange(desc(n_investors)) %>% 
+  kable(digits = 1) 
+```
+
+
 <!-- # Réseaux -->
 
 <!-- Scraper linkedin pour les gens qui ont un profil renseigné? -->
@@ -532,6 +609,67 @@ Manque à regarder dans quels rounds ces investisseurs investissent; ainsi que d
 
 <!-- => prendre les boites qui sont aussi investisseurs : dans quelles catégories est-ce qu'elles acquièrent ? = distribution et graph bipartite sur catégories/boites restreint aux boites de status == "acquired" -->
 
+## Quelles organisations sont achetées par des organisations de notre échantillon
 
+
+```{r}
+ia <- filter(acq, acquirer_uuid %in% org$org_uuid)
+```
+
+
+
+```{r}
+tabyl(ia, acquirer_name)  %>% 
+  arrange(desc(n)) %>% 
+  adorn_pct_formatting() %>% 
+  slice(1:50) %>% 
+  kable(caption = "Nombre d'acquisitions par boite (50 plus gros acquéreurs)")
+```
+
+```{r}
+group_by(ia, acquirer_name) %>% 
+  summarize(total_sum = sum(price_usd_corr, na.rm = TRUE) %>% accounting()) %>% 
+  arrange(desc(total_sum))  %>% 
+  slice(1:50) %>% 
+  kable(caption = "Montant total dépensés en acquisitions (50 plus gros acquéreurs, en dollars de 2015)")
+```
+
+```{r}
+tb <- separate_rows(ia, category_groups_list, sep = ",") %>% 
+  filter(!is.na(category_groups_list)) %>% 
+  select(acquiree_uuid, category_groups_list) %>% 
+  group_by(acquiree_uuid) %>% 
+  mutate(n = n()) %>% 
+  group_by(category_groups_list) %>% 
+  summarise(eff = n(),
+            eff_pond = sum(1/n)) %>% 
+  mutate(prop_cat = eff / sum(eff) * 100,
+         prop_ent = eff / nrow(org) * 100,
+         prop_pond = eff_pond / sum(eff_pond) * 100) %>% 
+  arrange(desc(eff)) %>%
+  select(category_groups_list, eff, prop_cat, prop_ent, eff_pond, prop_pond)
+
+kable(tb, caption = "Distribution des groupes de catégories des boites acquises", digits = 1)
+```
+
+
+```{r}
+tb <- separate_rows(ia, category_list, sep = ",") %>% 
+  filter(!is.na(category_list)) %>% 
+  select(acquiree_uuid, category_list) %>% 
+  group_by(acquiree_uuid) %>% 
+  mutate(n = n()) %>% 
+  group_by(category_list) %>% 
+  summarise(eff = n(),
+            eff_pond = sum(1/n)) %>% 
+  mutate(prop_cat = eff / sum(eff) * 100,
+         prop_ent = eff / nrow(org) * 100,
+         prop_pond = eff_pond / sum(eff_pond) * 100) %>% 
+  arrange(desc(eff)) %>% 
+  select(category_list, eff, prop_cat, prop_ent, eff_pond, prop_pond) %>% 
+  slice(1:50)
+
+kable(tb, caption = "Distribution des catégories des boites acquises (50 premières)", digits = 1)
+```
 
 
