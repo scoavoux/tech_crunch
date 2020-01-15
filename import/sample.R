@@ -233,6 +233,8 @@ acq <- filter(acq, acquired_on <= date_lim)
 
 acq <- filter(acq, acquiree_uuid %in% org$org_uuid | acquirer_uuid %in% org$org_uuid) 
 
+acq <- left_join(acq, o, by = c(acquiree_uuid = "org_uuid"))
+
 ###### Créer base des investisseurs ######
 
 inv <- read_csv(here("data", "investors.csv"),
