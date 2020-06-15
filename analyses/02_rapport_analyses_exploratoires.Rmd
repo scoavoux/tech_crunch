@@ -27,6 +27,7 @@ library(janitor)
 library(FactoMineR)
 library(factoextra)
 library(formattable)
+library(tsne)
 theme_set(theme_bw())
 for(file in list.files(here("functions"))){
   source(here("functions", file))
@@ -185,9 +186,36 @@ sp %>%
     scale_y_continuous(limits = c(0, NA))
 ```
 
+
+
 ```{r}
 rm(sp)
 ```
+
+
+## Co-occurence de catégories
+
+```{r, eval=FALSE}
+d_tsne <- separate_rows(org, category_groups_list, sep = ",") %>% 
+  filter(!is.na(category_groups_list)) %>% 
+  select(org_uuid, category_groups_list) %>% 
+  mutate(n = 1) %>% 
+  spread(org_uuid, n, fill = 0)
+
+res_tsne <- tsne(select(d_tsne, -category_groups_list))
+```
+
+```{r, eval=FALSE}
+as_tibble(res_tsne) %>% 
+  mutate(org_uuid = d_tsne$org_uuid) %>% 
+  left_join(select(org, org_uuid, name)) %>% 
+  sample_n(100) %>% 
+  ggplot(aes(V1, V2, label = name)) +
+    geom_point() +
+    geom_text()
+
+```
+
 
 <!-- # Géographie -->
 
@@ -616,8 +644,6 @@ select(x, sort(names(x))) %>%
 ia <- filter(acq, acquirer_uuid %in% org$org_uuid)
 ```
 
-
-
 ```{r}
 tabyl(ia, acquirer_name)  %>% 
   arrange(desc(n)) %>% 
@@ -633,6 +659,27 @@ group_by(ia, acquirer_name) %>%
   slice(1:50) %>% 
   kable(caption = "Montant total dépensés en acquisitions (50 plus gros acquéreurs, en dollars de 2015)")
 ```
+
+Same thing, but we restrict the base only to companies belonging to the sample
+
+```{r}
+filter(ia, acquirer_uuid %in% org$org_uuid) %>% 
+  tabyl(acquirer_name)  %>% 
+  arrange(desc(n)) %>% 
+  adorn_pct_formatting() %>% 
+  slice(1:50) %>% 
+  kable(caption = "Nombre d'acquisitions par boite (50 plus gros acquéreurs, acquéreurs font partie des organisations de l'échantillon)")
+```
+
+```{r}
+filter(ia, acquirer_uuid %in% org$org_uuid) %>% 
+  group_by(acquirer_name) %>% 
+  summarize(total_sum = sum(price_usd_corr, na.rm = TRUE) %>% accounting()) %>% 
+  arrange(desc(total_sum))  %>% 
+  slice(1:50) %>% 
+  kable(caption = "Montant total dépensés en acquisitions (50 plus gros acquéreurs, en dollars de 2015, acquéreurs font partie des organisations de l'échantillon)")
+```
+
 
 ```{r}
 tb <- separate_rows(ia, category_groups_list, sep = ",") %>% 
@@ -672,4 +719,25 @@ tb <- separate_rows(ia, category_list, sep = ",") %>%
 kable(tb, caption = "Distribution des catégories des boites acquises (50 premières)", digits = 1)
 ```
 
+# Politiques antitrust?
+
+```{r}
+filter(ia, acquirer_uuid %in% org$org_uuid) %>% 
+  arrange(desc(price_usd_corr)) %>% 
+  select(acquired_on, acquiree_name, acquirer_name, price_usd_corr) %>% 
+  slice(1:50) %>% 
+  kable(caption = "50 plus grosses acquisitions (par des boites de l'échantillon)")
+```
+
+# Destin
+
+Commencer par consolider les "statuts" indiqués dans la base org, qui sont nazes...
+
+```{r}
+
+mutate(org, status_cons = case_when(org_uuid %in% ipo$org_uuid ~ "ipo",
+                                    org_uuid %in% acq$acquiree_uuid ~ "acquired",
+                                    TRUE ~ status)) %>% 
+  tabyl(status, status_cons)
+```
 
